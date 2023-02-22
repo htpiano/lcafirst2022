@@ -4,6 +4,7 @@ import org.firstinspires.ftc.robotcore.external.navigation.Position;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.qualcomm.robotcore.hardware.CRServo;
 import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.hardware.DcMotorSimple.Direction;
 import com.qualcomm.robotcore.hardware.Blinker;
@@ -14,15 +15,16 @@ import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.util.ElapsedTime;
 import com.qualcomm.robotcore.hardware.Gamepad;
+import com.qualcomm.robotcore.hardware.HardwareMap;
 
 @TeleOp
 
-public class FTC2022OpMode extends LinearOpMode implements Gamepad.GamepadCallback {
+public class FTC2022OpMode extends LinearOpMode {
     private Blinker expansion_Hub_2;
     private DcMotor frontLeft;
     private DcMotor frontRight;
     private DcMotor armControl;
-    private Servo arm1;
+    private CRServo arm1;
     private Servo arm2;
     private Servo claw;
 
@@ -32,17 +34,25 @@ public class FTC2022OpMode extends LinearOpMode implements Gamepad.GamepadCallba
     private boolean downPressed = false;
     private int currentPos;
 
+    protected ArmState armState = new ArmStationary();
+    protected ElevationState elevationState = new ArmHolding();
+    protected DriveState driveState = null;
+
+
     public void runOpMode(){
         //expansion_Hub_2 = hardwareMap.get(Blinker.class, "Expansion Hub 2");
         frontLeft = hardwareMap.get(DcMotor.class, "frontLeft");
         frontRight = hardwareMap.get(DcMotor.class, "frontRight");
         armControl = hardwareMap.get(DcMotor.class, "armControl");
-        arm1 = hardwareMap.get(Servo.class,"arm1");
+        arm1 = hardwareMap.get(CRServo.class,"arm1");
         arm2 = hardwareMap.get(Servo.class,"arm2");
         claw = hardwareMap.get(Servo.class,"claw");
 
+        arm1.setDirection(Direction.FORWARD);
+        arm1.setPower(0);
+
         try {
-            Gamepad newGamepad = new Gamepad(this);
+            Gamepad newGamepad = new Gamepad();
             newGamepad.copy(gamepad1);
             this.gamepad1 = newGamepad;
         } catch (Exception e) {
@@ -83,7 +93,7 @@ public class FTC2022OpMode extends LinearOpMode implements Gamepad.GamepadCallba
 
         while (opModeIsActive() == true) {
             if (this.gamepad1.b){
-                telemetry.addData("Position", "current position: " + arm1.getPosition());
+                telemetry.addData("Arm Power", arm1.getPower());
                 telemetry.update();
             }
             if (this.gamepad1.a) {
@@ -135,24 +145,7 @@ public class FTC2022OpMode extends LinearOpMode implements Gamepad.GamepadCallba
                     leftWheel(0);
                     rightWheel(0);
                 }
-                if(this.gamepad1.x){
-                    if(upPressed == false){
-                        moveArm1(1);
-                        upPressed = true;
-                    }
-                }
-                else{
-                    upPressed = false;
-                }
-                if(this.gamepad1.y){
-                    if(downPressed == false){
-                        moveArm1(-1);
-                        downPressed = true;
-                    }
-                }
-                else{
-                    downPressed = false;
-                }
+                armState = armState.executeState(hardwareMap, gamepad1);
                 moveClaw(this.gamepad1.left_stick_x);
             }
         }
@@ -193,11 +186,13 @@ public class FTC2022OpMode extends LinearOpMode implements Gamepad.GamepadCallba
         armControl.setTargetPosition(currentPos);
     }
     //methods for moving the servos on the arm
+    /*
     public void moveArm1(double throttle) {
-        arm1.setPosition(arm1.getPosition() + throttle/10);
-        telemetry.addData("Extending", arm1.getPosition());
+        arm1.setPower(arm1.getPower() + throttle/10);
+        telemetry.addData("Extending", arm1.getPower());
         telemetry.update();
     }
+     */
     public void moveArm2(double throttle) {
         arm2.setPosition(arm2.getPosition() + 5);
     }
@@ -205,5 +200,113 @@ public class FTC2022OpMode extends LinearOpMode implements Gamepad.GamepadCallba
         claw.setPosition(claw.getPosition() + throttle/5);
     }
 
+    protected interface IControlState<A extends IControlState> {
+        public A executeState(HardwareMap map, Gamepad gamepad);
+    }
 
+    protected interface ArmState extends IControlState<ArmState> {}
+    protected interface ElevationState extends IControlState<ElevationState> {}
+    //protected interface GripperState extends IControlState<GripperState> {}
+    protected interface DriveState extends IControlState<DriveState> {}
+
+    protected class ArmStationary implements ArmState {
+
+        @Override
+        public ArmState executeState(HardwareMap map, Gamepad gamepad) {
+            CRServo servo = map.get(CRServo.class, "arm1");
+            ArmState returnValue;
+            if (gamepad.x) {
+                // moveArm1(1) from here
+                servo.setDirection(Direction.FORWARD);
+                servo.setPower(1);
+                returnValue = new ArmExtending();
+                FTC2022OpMode.this.telemetry.addData("State", "Arm Extending");
+            } else if (gamepad.y) {
+                // moveArm1(-1) from here
+                servo.setDirection(Direction.REVERSE);
+                servo.setPower(1);
+                returnValue = new ArmRetracting();
+                FTC2022OpMode.this.telemetry.addData("State", "Arm Retracting");
+            } else {
+                returnValue = this;
+                FTC2022OpMode.this.telemetry.addData("State", "Stationary");
+            }
+            FTC2022OpMode.this.telemetry.addData("Direction", servo.getDirection());
+            FTC2022OpMode.this.telemetry.addData("Power", servo.getPower());
+            FTC2022OpMode.this.telemetry.update();
+
+            return returnValue;
+        }
+    }
+
+    protected class ArmExtending implements ArmState {
+
+        @Override
+        public ArmState executeState(HardwareMap map, Gamepad gamepad) {
+            CRServo servo = map.get(CRServo.class, "arm1");
+            // TODO: Also check limits
+            if (!gamepad.x) {
+                servo.setPower(0);
+                return new ArmStationary();
+            } else{
+                return this;
+            }
+        }
+    }
+
+    protected class ArmRetracting implements ArmState {
+
+        @Override
+        public ArmState executeState(HardwareMap map, Gamepad gamepad) {
+            CRServo servo = map.get(CRServo.class, "arm1");
+            // TODO: Also check limits
+            if (!gamepad.y) {
+                servo.setPower(0);
+                return new ArmStationary();
+            } else {
+                return this;
+            }
+        }
+    }
+
+    protected class ArmHolding implements ElevationState {
+
+        @Override
+        public ElevationState executeState(HardwareMap map, Gamepad gamepad) {
+            if (gamepad.x) {
+                FTC2022OpMode.this.raiseArm();
+                return new RaisingArm();
+            } else if (gamepad.y) {
+                return new LoweringArm();
+            }else {
+                return this;
+            }
+        }
+    }
+
+    protected class RaisingArm implements ElevationState {
+
+        @Override
+        public ElevationState executeState(HardwareMap map, Gamepad gamepad) {
+            if (!gamepad.x) {
+                // TODO: Stop raising arm
+                return new ArmHolding();
+            } else {
+                return this;
+            }
+        }
+    }
+
+    protected class LoweringArm implements ElevationState {
+
+        @Override
+        public ElevationState executeState(HardwareMap map, Gamepad gamepad) {
+            if (!gamepad.y) {
+                // TODO: Stop lowering arm
+                return new ArmHolding();
+            } else {
+                return this;
+            }
+        }
+    }
 }
